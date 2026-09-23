@@ -7,7 +7,7 @@ sensible defaults.
 
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -98,6 +98,21 @@ class SecurityConfig(BaseSettings):
     safe_search_path: str = Field(
         default="public", description="Safe search_path to set during query execution"
     )
+    allow_explain: bool = Field(
+        default=False,
+        description=(
+            "EXPLAIN policy: allow EXPLAIN statements (plan inspection, no rows returned). "
+            "Disabled by default so generated SQL never reveals database internals."
+        ),
+    )
+    blocked_tables: list[str] = Field(
+        default_factory=list,
+        description="Sensitive tables that generated SQL must never reference",
+    )
+    blocked_columns: list[str] = Field(
+        default_factory=list,
+        description="Sensitive columns (e.g. PII) that generated SQL must never reference",
+    )
 
     @field_validator("blocked_functions", mode="before")
     @classmethod
@@ -107,6 +122,14 @@ class SecurityConfig(BaseSettings):
             return [f.strip() for f in v.split(",") if f.strip()]
         return v
 
+    @field_validator("blocked_tables", "blocked_columns", mode="before")
+    @classmethod
+    def parse_blocked_objects(cls, v: str | list[str]) -> list[str]:
+        """Parse comma-separated table/column lists from environment variables."""
+        if isinstance(v, str):
+            return [item.strip().lower() for item in v.split(",") if item.strip()]
+        return [str(item).strip().lower() for item in v]
+
 
 class ValidationConfig(BaseSettings):
     """Query validation configuration."""
@@ -115,9 +138,6 @@ class ValidationConfig(BaseSettings):
 
     max_question_length: int = Field(
         default=10000, ge=1, le=50000, description="Maximum question length in characters"
-    )
-    min_confidence_score: int = Field(
-        default=70, ge=0, le=100, description="Minimum confidence score (0-100)"
     )
 
     # Result validation settings
@@ -163,6 +183,18 @@ class ResilienceConfig(BaseSettings):
     circuit_breaker_timeout: float = Field(
         default=60.0, ge=10.0, le=300.0, description="Circuit breaker timeout in seconds"
     )
+    query_rate_limit: int = Field(
+        default=10, ge=1, le=1000, description="Maximum concurrent query executions"
+    )
+    llm_rate_limit: int = Field(
+        default=5, ge=1, le=1000, description="Maximum concurrent LLM API calls"
+    )
+    rate_limit_timeout: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=60.0,
+        description="Max seconds to wait for a rate-limit slot before rejecting a request",
+    )
 
 
 class ObservabilityConfig(BaseSettings):
@@ -177,7 +209,7 @@ class ObservabilityConfig(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO", description="Logging level"
     )
-    log_format: Literal["json", "text"] = Field(default="text", description="Log format")
+    log_format: Literal["json", "text"] = Field(default="json", description="Log format")
 
 
 class Settings(BaseSettings):
@@ -196,12 +228,53 @@ class Settings(BaseSettings):
 
     # Nested configurations
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    databases: dict[str, DatabaseConfig] = Field(
+        default_factory=dict,
+        description=(
+            "All queryable databases keyed by name; defaults to the primary "
+            "database config. Configure via env JSON, e.g. DATABASES='{...}'"
+        ),
+    )
+    default_database: str | None = Field(
+        default=None,
+        description=(
+            "Database used when a request does not specify one (defaults to the primary database)"
+        ),
+    )
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     resilience: ResilienceConfig = Field(default_factory=ResilienceConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+
+    @model_validator(mode="after")
+    def _normalize_databases(self) -> "Settings":
+        """Keep databases/default_database consistent with the primary database.
+
+        Ensures the primary database is always queryable, that every key matches
+        its config name, and that the default database resolves to a known entry.
+        """
+        databases = dict(self.databases)
+        primary = self.database
+        if primary.name not in databases:
+            databases[primary.name] = primary
+        default_name = self.default_database if self.default_database else primary.name
+        if default_name not in databases:
+            raise ValueError(f"default_database '{default_name}' is not one of {sorted(databases)}")
+        for name, config in databases.items():
+            if config.name != name:
+                raise ValueError(
+                    f"databases['{name}'].name is '{config.name}'; key and config name must match"
+                )
+        object.__setattr__(self, "databases", databases)
+        object.__setattr__(self, "default_database", default_name)
+        return self
+
+    @property
+    def database_names(self) -> list[str]:
+        """List all queryable database names."""
+        return list(self.databases.keys())
 
     @property
     def is_production(self) -> bool:

@@ -52,11 +52,38 @@ class SQLGenerator:
         previous_attempt: str | None = None,
         error_feedback: str | None = None,
     ) -> str:
-        """Generate SQL statement from natural language question.
+        """Generate SQL from a natural language question.
+
+        Convenience wrapper around generate_with_usage that discards the
+        token usage metadata.
+
+        Returns:
+            str: Generated SQL query.
+        """
+        sql, _tokens = await self.generate_with_usage(
+            question=question,
+            schema=schema,
+            context=context,
+            previous_attempt=previous_attempt,
+            error_feedback=error_feedback,
+        )
+        return sql
+
+    async def generate_with_usage(
+        self,
+        question: str,
+        schema: "DatabaseSchema",
+        context: str | None = None,
+        previous_attempt: str | None = None,
+        error_feedback: str | None = None,
+    ) -> tuple[str, int | None]:
+        """Generate SQL from a natural language question, capturing usage.
 
         This method sends the question and database schema to OpenAI's API
         and extracts the generated SQL query from the response. It supports
-        retry scenarios by accepting previous failed attempts and error feedback.
+        retry scenarios by accepting previous failed attempts and error
+        feedback, and returns the token usage reported by the API so callers
+        can track LLM cost per request.
 
         Args:
             question: User's natural language question.
@@ -66,7 +93,8 @@ class SQLGenerator:
             error_feedback: Error message from previous attempt (for retry).
 
         Returns:
-            str: Generated SQL query (without trailing semicolon).
+            tuple[str, int | None]: (generated SQL, total tokens used) where
+                tokens is None when the API omits usage metadata.
 
         Raises:
             LLMError: If generation fails or response is invalid.
@@ -75,16 +103,9 @@ class SQLGenerator:
 
         Example:
             >>> # Initial generation
-            >>> sql = await generator.generate(
+            >>> sql, tokens = await generator.generate_with_usage(
             ...     question="Count all active users",
             ...     schema=db_schema
-            ... )
-            >>> # Retry with error feedback
-            >>> sql = await generator.generate(
-            ...     question="Count all active users",
-            ...     schema=db_schema,
-            ...     previous_attempt="SELECT COUNT(*) FROM user",
-            ...     error_feedback='relation "user" does not exist'
             ... )
         """
         user_prompt = build_user_prompt(
@@ -149,7 +170,11 @@ class SQLGenerator:
                 details={"content": content},
             )
 
-        return sql
+        # Capture token usage metadata (None when the API omits it)
+        usage = getattr(response, "usage", None)
+        total_tokens = getattr(usage, "total_tokens", None) if usage else None
+
+        return sql, total_tokens
 
     def _extract_sql(self, content: str) -> str | None:
         """Extract SQL query from LLM response content.

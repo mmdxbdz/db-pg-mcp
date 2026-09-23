@@ -1,0 +1,19 @@
+# Local secrets - never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv-cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Generated screenshots (local verification artifacts, not part of the repo)
+docs/screenshots/

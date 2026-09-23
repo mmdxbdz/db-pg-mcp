@@ -4,9 +4,19 @@ This module provides comprehensive integration tests that verify the complete
 query flow through all components of the system.
 """
 
+import os
+
 import pytest
 
 from pg_mcp.server import lifespan, mcp, query
+
+# These suites exercise the real lifespan: a live PostgreSQL instance plus a
+# valid OpenAI API key are required. They are opt-in: set PG_MCP_E2E=1 (and
+# provide the credentials) to include them in a test run.
+pytestmark = pytest.mark.skipif(
+    os.getenv("PG_MCP_E2E", "").lower() not in ("1", "true", "yes"),
+    reason="requires live PostgreSQL and OpenAI credentials; set PG_MCP_E2E=1 to enable",
+)
 
 
 class TestFullQueryFlow:

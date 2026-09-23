@@ -156,6 +156,9 @@ class QueryResponse(BaseModel):
         default=100, ge=0, le=100, description="Confidence score of generated SQL (0-100)"
     )
     tokens_used: int | None = Field(None, ge=0, description="LLM tokens used for generation")
+    request_id: str | None = Field(
+        None, description="Request correlation ID propagated through the whole pipeline"
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert response to dictionary for MCP tool return.
@@ -210,11 +213,3 @@ class QueryResponse(BaseModel):
             if not success and v is None:
                 raise ValueError("Error must be present when success is False")
         return v
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert response to dictionary.
-
-        Returns:
-            dict: Dictionary representation of query response.
-        """
-        return self.model_dump(exclude_none=True)

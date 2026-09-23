@@ -105,6 +105,13 @@ class SchemaCache:
         schema = await introspector.introspect()
 
         if self.config.enabled:
+            # Enforce the configured cache capacity: evict the oldest entry
+            # (previously this setting was declared but never used).
+            while len(self._cache) >= self.config.max_size:
+                oldest = min(self._cache_timestamps, key=self._cache_timestamps.get)
+                self._cache.pop(oldest, None)
+                self._cache_timestamps.pop(oldest, None)
+                logger.debug(f"Evicted cache entry for '{oldest}' (max_size reached)")
             self._cache[database_name] = schema
             self._cache_timestamps[database_name] = datetime.now(UTC)
 

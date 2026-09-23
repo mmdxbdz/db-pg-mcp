@@ -144,7 +144,7 @@ class TestSQLGenerationWithRetry:
         """Test successful SQL generation on first attempt."""
         # Setup mocks
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "SELECT * FROM users;"
+        mock_generator.generate_with_usage.return_value = ("SELECT * FROM users;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.return_value = None  # No exception = valid
@@ -171,7 +171,7 @@ class TestSQLGenerationWithRetry:
         assert sql == "SELECT * FROM users;"
         assert validation_result.is_valid is True
         assert validation_result.is_select is True
-        mock_generator.generate.assert_called_once()
+        mock_generator.generate_with_usage.assert_called_once()
         mock_validator.validate_or_raise.assert_called_once_with("SELECT * FROM users;")
 
     @pytest.mark.asyncio
@@ -181,9 +181,9 @@ class TestSQLGenerationWithRetry:
         """Test retry logic when validation fails."""
         # Setup mocks - first attempt fails validation, second succeeds
         mock_generator = AsyncMock()
-        mock_generator.generate.side_effect = [
-            "SELECT * FROM user;",  # First attempt (wrong table name)
-            "SELECT * FROM users;",  # Second attempt (correct)
+        mock_generator.generate_with_usage.side_effect = [
+            ("SELECT * FROM user;", 0),  # First attempt (wrong table name)
+            ("SELECT * FROM users;", 0),  # Second attempt (correct)
         ]
 
         mock_validator = MagicMock()
@@ -214,11 +214,11 @@ class TestSQLGenerationWithRetry:
         # Verify
         assert sql == "SELECT * FROM users;"
         assert validation_result.is_valid is True
-        assert mock_generator.generate.call_count == 2
+        assert mock_generator.generate_with_usage.call_count == 2
         assert mock_validator.validate_or_raise.call_count == 2
 
         # Verify retry included error feedback
-        second_call = mock_generator.generate.call_args_list[1]
+        second_call = mock_generator.generate_with_usage.call_args_list[1]
         assert second_call.kwargs["previous_attempt"] == "SELECT * FROM user;"
         assert 'relation "user" does not exist' in second_call.kwargs["error_feedback"]
 
@@ -227,7 +227,7 @@ class TestSQLGenerationWithRetry:
         """Test failure after exhausting all retries."""
         # Setup mocks - all attempts fail validation
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "DELETE FROM users;"
+        mock_generator.generate_with_usage.return_value = ("DELETE FROM users;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.side_effect = SecurityViolationError(
@@ -255,7 +255,7 @@ class TestSQLGenerationWithRetry:
 
         assert "DELETE statements are not allowed" in str(exc_info.value)
         # Should attempt max_retries + 1 times (initial + retries)
-        assert mock_generator.generate.call_count == 3
+        assert mock_generator.generate_with_usage.call_count == 3
         assert orchestrator.circuit_breaker.failure_count == 1
 
     @pytest.mark.asyncio
@@ -291,7 +291,7 @@ class TestSQLGenerationWithRetry:
     async def test_generate_sql_unexpected_error(self, mock_schema: DatabaseSchema) -> None:
         """Test handling of unexpected errors during generation."""
         mock_generator = AsyncMock()
-        mock_generator.generate.side_effect = RuntimeError("Unexpected error")
+        mock_generator.generate_with_usage.side_effect = RuntimeError("Unexpected error")
 
         orchestrator = QueryOrchestrator(
             sql_generator=mock_generator,
@@ -442,7 +442,7 @@ class TestExecuteQueryFlow:
         """Test executing query with return_type=SQL."""
         # Setup mocks
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "SELECT * FROM users;"
+        mock_generator.generate_with_usage.return_value = ("SELECT * FROM users;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.return_value = None
@@ -482,7 +482,7 @@ class TestExecuteQueryFlow:
         """Test executing query with return_type=RESULT."""
         # Setup mocks
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "SELECT id, name FROM users;"
+        mock_generator.generate_with_usage.return_value = ("SELECT id, name FROM users;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.return_value = None
@@ -551,7 +551,7 @@ class TestExecuteQueryFlow:
         mock_cache.load = AsyncMock(return_value=mock_schema)
 
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "SELECT 1;"
+        mock_generator.generate_with_usage.return_value = ("SELECT 1;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.return_value = None
@@ -628,7 +628,7 @@ class TestExecuteQueryFlow:
         mock_cache.get.return_value = mock_schema
 
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "DELETE FROM users;"
+        mock_generator.generate_with_usage.return_value = ("DELETE FROM users;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.side_effect = SecurityViolationError("DELETE not allowed")
@@ -666,7 +666,7 @@ class TestExecuteQueryFlow:
         mock_cache.get.return_value = mock_schema
 
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "SELECT * FROM users;"
+        mock_generator.generate_with_usage.return_value = ("SELECT * FROM users;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.return_value = None
@@ -739,7 +739,7 @@ class TestExecuteQueryFlow:
         mock_cache.get.return_value = mock_schema
 
         mock_generator = AsyncMock()
-        mock_generator.generate.return_value = "SELECT 1;"
+        mock_generator.generate_with_usage.return_value = ("SELECT 1;", 42)
 
         mock_validator = MagicMock()
         mock_validator.validate_or_raise.return_value = None

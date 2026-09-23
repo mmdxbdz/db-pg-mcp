@@ -57,6 +57,9 @@ ignore = ["RUF022"] # Allow organized __all__ with comments
     "S105",
     "S106",
 ] # allow assert and hardcoded passwords in tests
+"scripts/**" = [
+    "S101",
+] # allow assert in self-verifying demo scripts
 
 [tool.mypy]
 python_version = "3.11"

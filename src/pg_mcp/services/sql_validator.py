@@ -26,13 +26,16 @@ class SQLValidator:
     """
 
     # Allowed statement types at the top level (including set operations)
-    ALLOWED_STATEMENT_TYPES: ClassVar = {
-        exp.Select, exp.Union, exp.Intersect, exp.Except
-    }
+    ALLOWED_STATEMENT_TYPES: ClassVar = {exp.Select, exp.Union, exp.Intersect, exp.Except}
 
     # Allowed top-level expressions (including CTEs)
     ALLOWED_TOP_LEVEL: ClassVar = {
-        exp.Select, exp.Union, exp.Intersect, exp.Except, exp.With, exp.Subquery
+        exp.Select,
+        exp.Union,
+        exp.Intersect,
+        exp.Except,
+        exp.With,
+        exp.Subquery,
     }
 
     # Forbidden statement types
@@ -79,25 +82,56 @@ class SQLValidator:
         config: SecurityConfig,
         blocked_tables: list[str] | None = None,
         blocked_columns: list[str] | None = None,
-        allow_explain: bool = False,
+        allow_explain: bool | None = None,
     ) -> None:
         """Initialize SQL validator.
 
+        Access-control policy defaults come from 'config' so that settings
+        (and therefore environment variables) drive enforcement even when the
+        caller does not pass the optional arguments explicitly:
+
+        * 'config.blocked_tables' protects sensitive tables,
+        * 'config.blocked_columns' protects sensitive columns (e.g. PII),
+        * 'config.allow_explain' is the EXPLAIN policy,
+        * 'config.allow_write_operations' gates INSERT/UPDATE/DELETE.
+
         Args:
-            config: Security configuration containing blocked functions and settings.
-            blocked_tables: Optional list of table names to block access to.
-            blocked_columns: Optional list of column names to block access to.
-            allow_explain: Whether to allow EXPLAIN statements.
+            config: Security configuration containing blocked functions and
+                access-control policy.
+            blocked_tables: Optional override list of table names to block.
+            blocked_columns: Optional override list of column names to block.
+            allow_explain: Optional override for the EXPLAIN policy.
         """
         self.config = config
-        self.blocked_tables = {t.lower() for t in (blocked_tables or [])}
-        self.blocked_columns = {c.lower() for c in (blocked_columns or [])}
-        self.allow_explain = allow_explain
+        effective_blocked_tables = (
+            config.blocked_tables if blocked_tables is None else blocked_tables
+        )
+        effective_blocked_columns = (
+            config.blocked_columns if blocked_columns is None else blocked_columns
+        )
+        self.blocked_tables = {t.lower() for t in effective_blocked_tables}
+        self.blocked_columns = {c.lower() for c in effective_blocked_columns}
+        self.allow_explain = config.allow_explain if allow_explain is None else allow_explain
 
         # Combine built-in dangerous functions with custom blocked functions
         self.blocked_functions = self.BUILTIN_DANGEROUS_FUNCTIONS | {
             f.lower() for f in config.blocked_functions
         }
+
+    @classmethod
+    def from_config(cls, config: SecurityConfig) -> "SQLValidator":
+        """Build a validator whose policy comes entirely from 'config'.
+
+        This is the wiring point that turns declared settings (blocked tables,
+        blocked columns, EXPLAIN policy, write policy) into actual enforcement.
+
+        Args:
+            config: Security configuration.
+
+        Returns:
+            SQLValidator: A validator enforcing the configured policy.
+        """
+        return cls(config)
 
     def validate(self, sql: str) -> tuple[bool, str | None]:
         """Validate SQL query for security compliance.
@@ -202,6 +236,12 @@ class SQLValidator:
         Returns:
             Error message if check fails, None otherwise.
         """
+        # Optionally allow writes when explicitly configured
+        if self.config.allow_write_operations and isinstance(
+            statement, (exp.Insert, exp.Update, exp.Delete)
+        ):
+            return None
+
         # Check for forbidden statement types
         for forbidden_type in self.FORBIDDEN_STATEMENT_TYPES:
             if isinstance(statement, forbidden_type):
